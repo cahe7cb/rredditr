@@ -1,0 +1,10 @@
+version: '3'
+services:
+  redis:
+    image: "redis:latest"
+    expose:
+      - "6379"
+  bot:
+    build: .
+    depends_on:
+      - redis
