@@ -5,13 +5,13 @@ authors = ["cahe"]
 edition = "2018"
 
 [dependencies]
+telebot = "0.3.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
 reqwest = {version = "0.9", features = ["rustls-tls"] }
-telegram-bot = "0.6.1"
 tokio = "0.1.17"
 tokio-core = "0.1.17"
 futures = "0.1.25"
-redis = "0.10.0"
-
+redis = "0.10"
+failure = "0.1"

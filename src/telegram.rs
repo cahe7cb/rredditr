@@ -1,100 +1,117 @@
-use tokio_core::reactor::Core;
+use telebot::bot::RequestHandle;
+use telebot::functions::FunctionSendMessage;
+use telebot::objects::Message;
 
-use redis::Commands;
+use futures::prelude::*;
 
-use tokio::sync::mpsc;
+use redis::r#async::SharedConnection;
 
-use futures::*;
-use telegram_bot::*;
+use crate::commands::DatabaseCommand;
 
-fn telegram_worker_context(
-    redis: redis::Connection,
-    updates: mpsc::Receiver<(i64, Vec<String>)>,
-    token: String,
-) {
-    let mut core = Core::new().unwrap();
-    let telegram = Api::configure(token)
-        .build(core.handle())
-        .expect("Failed to configure Telegram API");
-
-    let commands = telegram
-        .stream()
-        .for_each(|update| {
-            if let UpdateKind::Message(message) = update.kind {
-                if let MessageKind::Text { ref data, .. } = message.kind {
-                    if data.starts_with("/subs") {
-                        let subs: Vec<String> = redis.smembers("main/subs").unwrap();
-                        let mut response = String::from("Available subs\n");
-                        for sub in &subs {
-                            response.push_str(&format!("{}\n", sub));
-                        }
-                        telegram.spawn(message.text_reply(response));
-                    } else if data.starts_with("/sub") {
-                        let arg: Vec<&str> = data.split(' ').collect();
-                        if let Some(sub) = arg.get(1) {
-                            if redis
-                                .sismember::<&str, &str, bool>("main/subs", *sub)
-                                .unwrap()
-                            {
-                                let _: () = redis
-                                    .sadd(
-                                        format!("subscribers/{}", sub),
-                                        i64::from(message.chat.id()),
-                                    )
-                                    .unwrap();
-                            }
-                        }
-                    } else if data.starts_with("/unsub") {
-                        let v: Vec<&str> = data.split(' ').collect();
-                        if let Some(sub) = v.get(1) {
-                            let _: () = redis
-                                .srem(format!("subscribers/{}", sub), i64::from(message.chat.id()))
-                                .unwrap();
-                        }
-                    }
-                }
-            }
-            Ok(())
+fn handle_available(
+    handle: RequestHandle,
+    message: Message,
+    conn: SharedConnection,
+) -> impl Future<Item = (), Error = ()> {
+    redis::cmd("SMEMBERS")
+        .arg("main/subs")
+        .query_async::<_, Vec<String>>(conn)
+        .map_err(|err: redis::RedisError| {
+            eprintln!("Failed to retrieve available subreddits: {:#?}", err);
         })
-        .map_err(|err| {
-            eprintln!("Telegram stream error: {:#?}", err);
-        });
-
-    let dispatcher = updates.map_err(|_| ()).for_each(|(subscriber, batch)| {
-        let chat = ChatId::new(subscriber);
-        future::loop_fn((chat, batch.into_iter()), |(chat, mut iter)| {
-            let mut send = vec![];
-            if let Some(message) = iter.next() {
-                send.push(
-                    telegram
-                        .send(chat.text(message))
-                        .and_then(|_response| Ok(()))
-                        .map_err(|err| {
-                            eprintln!("Telegram request error: {:#?}", err);
-                        }),
-                )
+        .and_then(move |(_conn, results)| {
+            let mut reply = String::from("These are the available subreddits:\n");
+            for sub in results {
+                reply.push_str(format!("- {}\n", sub).as_str());
             }
-            future::join_all(send).and_then(move |result| match result.len() {
-                0 => Ok(future::Loop::Break(())),
-                _ => Ok(future::Loop::Continue((chat, iter))),
-            })
+            handle.message(message.chat.id, reply).send()
+                .map_err(|_| {})
         })
-    });
-
-    core.run(commands.join(dispatcher))
-        .expect("The bot is dead");
+        .map(|_| {})
 }
 
-pub fn start_worker(
-    client: &redis::Client,
-    updates: mpsc::Receiver<(i64, Vec<String>)>,
-    token: String,
-) {
-    let redis = client
-        .get_connection()
-        .expect("Failed to connect to database");
+fn handle_unsubscribe(
+    handle: RequestHandle,
+    message: Message,
+    conn: SharedConnection,
+) -> impl Future<Item = (), Error = ()> {
+    let target = match message.text.clone() {
+        Some(str) => str,
+        None => String::new(),
+    };
+    redis::cmd("SREM")
+        .arg(format!("subscribers/{}", target))
+        .arg(message.chat.id)
+        .query_async::<_, ()>(conn)
+        .map_err(|err: redis::RedisError| {
+            eprintln!("Failed to unsubscribe from subreddit: {:#?}", err);
+        })
+        .and_then(move |_| {
+            handle
+                .message(
+                    message.chat.id,
+                    format!("You are no longer subscribed to {}", target),
+                )
+                .send()
+                .map_err(|_| {})
+        })
+        .map(|_| {})
+}
+fn handle_subscribe(
+    handle: RequestHandle,
+    message: Message,
+    conn: SharedConnection,
+) -> impl Future<Item = (), Error = ()> {
+    let target = match message.text.clone() {
+        Some(str) => str,
+        None => String::new(),
+    };
+    redis::cmd("SISMEMBER")
+        .arg(format!("main/subs"))
+        .arg(&target)
+        .query_async::<_, bool>(conn)
+        .map_err(|err: redis::RedisError| {
+            eprintln!("Failed checking for existence of subreddit: {:#?}", err);
+        })
+        .and_then(|(conn, _exists)| {
+            redis::cmd("SADD")
+                .arg(format!("subscribers/{}", target))
+                .arg(message.chat.id)
+                .query_async::<_, ()>(conn)
+                .map_err(|err: redis::RedisError| {
+                    eprintln!("Failed to subscribe to: {:#?}", err);
+                })
+                .and_then(move |_| {
+                    handle
+                        .message(
+                            message.chat.id,
+                            format!("You are now subscribed to {}", target),
+                        )
+                        .send()
+                        .map_err(|_| {})
+                })
+        })
+        .map(|_| {})
+        .map_err(|_| {})
+}
 
-    std::thread::spawn(|| {
-        telegram_worker_context(redis, updates, token);
-    });
+pub fn telegram_context(conn: SharedConnection, mut bot: telebot::Bot) {
+    tokio::executor::spawn(
+        DatabaseCommand::new(bot.new_cmd("/sub"), conn.clone())
+            .map_err(|_| {})
+            .for_each(|(handle, msg, conn)| handle_subscribe(handle, msg, conn)),
+    );
+    tokio::executor::spawn(
+        DatabaseCommand::new(bot.new_cmd("/unsub"), conn.clone())
+            .map_err(|_| {})
+            .for_each(|(handle, msg, conn)| handle_unsubscribe(handle, msg, conn)),
+    );
+    tokio::executor::spawn(
+        DatabaseCommand::new(bot.new_cmd("/subs"), conn.clone())
+            .map_err(|_| {})
+            .for_each(|(handle, msg, conn)| handle_available(handle, msg, conn)),
+    );
+    tokio::executor::spawn(bot.into_future().map_err(|err| {
+        eprintln!("Telegram API error: {:#?}", err);
+    }));
 }

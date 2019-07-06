@@ -7,11 +7,14 @@ use futures::*;
 mod reddit;
 mod telegram;
 mod worker;
+mod commands;
+
+use telebot::*;
 
 type SharedDependency = (
     reqwest::r#async::Client,
     redis::r#async::SharedConnection,
-    tokio::sync::mpsc::Sender<(i64, Vec<String>)>,
+    bot::RequestHandle,
 );
 
 fn new_update_delay() -> impl future::Future<Item = (), Error = ()> {
@@ -45,30 +48,27 @@ fn update_available_subs(
 fn updater_worker_context(
     http: reqwest::r#async::Client,
     conn: redis::r#async::SharedConnection,
-    send: tokio::sync::mpsc::Sender<(i64, Vec<String>)>,
+    bot: telebot::bot::RequestHandle,
 ) -> impl Future<Item = (), Error = ()> {
-    future::loop_fn((http, conn, send), |(http, conn, send)| {
+    future::loop_fn((http, conn, bot), |(http, conn, bot)| {
         redis::cmd("SMEMBERS")
             .arg("main/subs")
             .query_async::<_, Vec<String>>(conn)
             .map_err(|err: redis::RedisError| {
                 eprintln!("Failed to update subreddits list: {:#?}", err);
             })
-            .and_then(|(conn, subs)| update_available_subs(subs.into_iter(), (http, conn, send)))
-            .and_then(|(http, conn, send)| Ok(future::Loop::Continue((http, conn, send))))
+            .and_then(|(conn, subs)| update_available_subs(subs.into_iter(), (http, conn, bot)))
+            .and_then(|(http, conn, bot)| Ok(future::Loop::Continue((http, conn, bot))))
     })
 }
 
 fn main() {
     let addr = env::var("REDIS_ADDRESS").expect("No database address specified");
     let token = env::var("TELEGRAM_BOT_TOKEN").expect("Telegram API token not found");
+    let bot = Bot::new(token.as_str()).update_interval(200);
 
     let redis = redis::Client::open(addr.as_str()).expect("Could not find database");
     let http = reqwest::r#async::Client::new();
-
-    let (send, updates) = tokio::sync::mpsc::channel::<(i64, Vec<String>)>(1024 * 1024);
-
-    telegram::start_worker(&redis, updates, token);
 
     tokio::run(
         redis
@@ -76,6 +76,9 @@ fn main() {
             .map_err(|err: redis::RedisError| {
                 eprintln!("Failed to establish worker database connection: {:#?}", err);
             })
-            .and_then(|conn| updater_worker_context(http, conn, send)),
+            .and_then(move |conn| {
+                telegram::telegram_context(conn.clone(), bot.clone());
+                updater_worker_context(http, conn.clone(), bot.request)
+            }),
     );
 }

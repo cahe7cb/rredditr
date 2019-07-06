@@ -2,21 +2,38 @@ use crate::reddit::decode_submission_array;
 use crate::reddit::Submission;
 use crate::reddit::RECENT_OFFSET;
 
+use telebot::bot::RequestHandle;
+use telebot::functions::FunctionSendMessage;
+
 use futures::*;
-use tokio::sync::mpsc::*;
 
 use serde_json::Value;
 
 fn dispatch_news(
-    mut send: Sender<(i64, Vec<String>)>,
+    bot: RequestHandle,
     news: Vec<Submission>,
     subscribers: Vec<i64>,
-) {
-    let batch: Vec<String> = news.into_iter().map(|post| post.get_url()).collect();
-    for subscriber in subscribers {
-        send.try_send((subscriber, batch.clone()))
-            .expect("Failed to send update batch");
+) -> impl Future<Item = (), Error = ()> {
+    let urls: Vec<String> = news.into_iter().map(|post| post.get_url()).collect();
+    let mut updates = vec![];
+    for url in urls.into_iter() {
+        for subscriber in subscribers.iter() {
+            updates.push(bot.message(*subscriber, url.to_string()).send());
+        }
     }
+    future::loop_fn(updates.into_iter(), move |mut iter| {
+        let mut send = vec![];
+        if let Some(message) = iter.next() {
+            send.push(message);
+        }
+        future::join_all(send).and_then(move |result| match result.len() {
+            0 => Ok(future::Loop::Break(())),
+            _ => Ok(future::Loop::Continue(iter)),
+        })
+    })
+    .map_err(|err| {
+        eprintln!("Telegram API error on dispatch news: {:#?}", err);
+    })
 }
 
 fn get_subscribers(
@@ -110,7 +127,7 @@ fn get_subreddit_data(
 pub fn handle_update(
     http: &reqwest::r#async::Client,
     conn: redis::r#async::SharedConnection,
-    send: Sender<(i64, Vec<String>)>,
+    bot: RequestHandle,
     subreddit: String,
 ) -> impl Future<Item = (), Error = ()> {
     get_subreddit_data(&http, &subreddit)
@@ -118,5 +135,5 @@ pub fn handle_update(
         .map(decode_submission_array)
         .and_then(|submissions| process_submissions(conn, submissions))
         .and_then(|(conn, news)| get_subscribers(conn, subreddit, news))
-        .map(|(subscribers, news)| dispatch_news(send, news, subscribers))
+        .and_then(|(subscribers, news)| dispatch_news(bot, news, subscribers))
 }
