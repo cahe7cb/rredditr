@@ -65,7 +65,7 @@ fn updater_worker_context(
 fn main() {
     let addr = env::var("REDIS_ADDRESS").expect("No database address specified");
     let token = env::var("TELEGRAM_BOT_TOKEN").expect("Telegram API token not found");
-    let bot = Bot::new(token.as_str()).update_interval(200);
+    let bot = Bot::new(token.as_str()).update_interval(1000);
 
     let redis = redis::Client::open(addr.as_str()).expect("Could not find database");
     let http = reqwest::r#async::Client::new();
