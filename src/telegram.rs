@@ -24,7 +24,9 @@ fn handle_available(
             for sub in results {
                 reply.push_str(format!("- {}\n", sub).as_str());
             }
-            handle.message(message.chat.id, reply).send()
+            handle
+                .message(message.chat.id, reply)
+                .send()
                 .map_err(|_| {})
         })
         .map(|_| {})
@@ -73,26 +75,44 @@ fn handle_subscribe(
         .map_err(|err: redis::RedisError| {
             eprintln!("Failed checking for existence of subreddit: {:#?}", err);
         })
-        .and_then(|(conn, _exists)| {
+        .then(move |result| {
+            let chat = message.chat.id;
+            if let Ok((conn, exists)) = result {
+                if exists {
+                    Ok((conn, handle, chat, target))
+                } else {
+                    Err((handle, chat, target))
+                }
+            } else {
+                Err((handle, chat, target))
+            }
+        })
+        .map_err(|(handle, chat, target)| {
+            tokio::executor::spawn(
+                handle
+                    .message(chat, format!("The subreddit {} is not available", target))
+                    .send()
+                    .map(|_| {})
+                    .map_err(|_| {}),
+            );
+        })
+        .and_then(|(conn, handle, chat, target)| {
             redis::cmd("SADD")
                 .arg(format!("subscribers/{}", target))
-                .arg(message.chat.id)
+                .arg(chat)
                 .query_async::<_, ()>(conn)
                 .map_err(|err: redis::RedisError| {
                     eprintln!("Failed to subscribe to: {:#?}", err);
                 })
                 .and_then(move |_| {
                     handle
-                        .message(
-                            message.chat.id,
-                            format!("You are now subscribed to {}", target),
-                        )
+                        .message(chat, format!("You are now subscribed to {}", target))
                         .send()
                         .map_err(|_| {})
                 })
         })
         .map(|_| {})
-        .map_err(|_| {})
+        .or_else(|_| Ok(()))
 }
 
 pub fn telegram_context(conn: SharedConnection, mut bot: telebot::Bot) {
