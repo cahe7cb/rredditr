@@ -7,18 +7,14 @@ use futures::prelude::*;
 use redis::r#async::SharedConnection;
 
 use crate::commands::DatabaseCommand;
+use crate::database::Database;
 
 fn handle_available(
     handle: RequestHandle,
     message: Message,
     conn: SharedConnection,
 ) -> impl Future<Item = (), Error = ()> {
-    redis::cmd("SMEMBERS")
-        .arg("main/subs")
-        .query_async::<_, Vec<String>>(conn)
-        .map_err(|err: redis::RedisError| {
-            eprintln!("Failed to retrieve available subreddits: {:#?}", err);
-        })
+    Database::fetch_available_subs(conn)
         .and_then(move |(_conn, results)| {
             let mut reply = String::from("These are the available subreddits:\n");
             for sub in results {
@@ -41,13 +37,7 @@ fn handle_unsubscribe(
         Some(str) => str,
         None => String::new(),
     };
-    redis::cmd("SREM")
-        .arg(format!("subscribers/{}", target))
-        .arg(message.chat.id)
-        .query_async::<_, ()>(conn)
-        .map_err(|err: redis::RedisError| {
-            eprintln!("Failed to unsubscribe from subreddit: {:#?}", err);
-        })
+    Database::delete_subscriber(conn, &target, message.chat.id)
         .and_then(move |_| {
             handle
                 .message(
@@ -68,13 +58,7 @@ fn handle_subscribe(
         Some(str) => str,
         None => String::new(),
     };
-    redis::cmd("SISMEMBER")
-        .arg(format!("main/subs"))
-        .arg(&target)
-        .query_async::<_, bool>(conn)
-        .map_err(|err: redis::RedisError| {
-            eprintln!("Failed checking for existence of subreddit: {:#?}", err);
-        })
+    Database::fetch_is_sub_available(conn, &target)
         .then(move |result| {
             let chat = message.chat.id;
             if let Ok((conn, exists)) = result {
@@ -97,13 +81,7 @@ fn handle_subscribe(
             );
         })
         .and_then(|(conn, handle, chat, target)| {
-            redis::cmd("SADD")
-                .arg(format!("subscribers/{}", target))
-                .arg(chat)
-                .query_async::<_, ()>(conn)
-                .map_err(|err: redis::RedisError| {
-                    eprintln!("Failed to subscribe to: {:#?}", err);
-                })
+            Database::insert_subscriber(conn, &target, chat)
                 .and_then(move |_| {
                     handle
                         .message(chat, format!("You are now subscribed to {}", target))

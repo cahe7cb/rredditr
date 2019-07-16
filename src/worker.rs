@@ -9,6 +9,8 @@ use futures::*;
 
 use serde_json::Value;
 
+use crate::database::Database;
+
 fn dispatch_news(
     bot: RequestHandle,
     news: Vec<Submission>,
@@ -41,30 +43,8 @@ fn get_subscribers(
     subreddit: String,
     news: Vec<Submission>,
 ) -> impl Future<Item = (Vec<i64>, Vec<Submission>), Error = ()> {
-    redis::cmd("SMEMBERS")
-        .arg(format!("subscribers/{}", subreddit))
-        .query_async::<_, Vec<i64>>(conn)
+    Database::fetch_subscribers(conn, subreddit)
         .map(|(_, subscribers)| (subscribers, news))
-        .map_err(move |err: redis::RedisError| {
-            eprintln!("Failed to load subscribers for {}: {:#?}", subreddit, err);
-        })
-}
-
-fn update_new_submissions(
-    conn: redis::r#async::SharedConnection,
-    news: Vec<Submission>,
-) -> impl Future<Item = (redis::r#async::SharedConnection, Vec<Submission>), Error = ()> {
-    let now = chrono::Utc::now().timestamp() as f64;
-    let pipe = news.iter().fold(redis::pipe(), |mut pipe, post| {
-        pipe.cmd("SETEX")
-            .arg((post.get_key(), 2.0 * RECENT_OFFSET, post.get_tag(now)))
-            .to_owned()
-    });
-    pipe.query_async::<_, ()>(conn)
-        .and_then(|(conn, _)| Ok((conn, news)))
-        .map_err(|err: redis::RedisError| {
-            eprintln!("Failed to update posts: {:#?}", err);
-        })
 }
 
 fn filter_new_submissions(
@@ -92,15 +72,9 @@ fn process_submissions(
     submissions: Vec<Submission>,
 ) -> impl Future<Item = (redis::r#async::SharedConnection, Vec<Submission>), Error = ()> {
     let keys: Vec<String> = submissions.iter().map(|post| post.get_key()).collect();
-
-    redis::cmd("MGET")
-        .arg(keys)
-        .query_async::<_, Vec<redis::Value>>(conn)
-        .map_err(|err: redis::RedisError| {
-            eprintln!("Failed retrieving posts status: {:#?}", err);
-        })
+    Database::fetch_submissions_status(conn, keys)
         .and_then(|(conn, values)| {
-            update_new_submissions(conn, filter_new_submissions(values, submissions))
+            Database::update_submissions(conn, filter_new_submissions(values, submissions))
         })
 }
 
