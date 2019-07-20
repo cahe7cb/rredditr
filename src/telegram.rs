@@ -6,6 +6,7 @@ use futures::prelude::*;
 
 use redis::r#async::SharedConnection;
 
+use crate::commands::CommandStream;
 use crate::commands::DatabaseCommand;
 use crate::database::Database;
 
@@ -81,34 +82,37 @@ fn handle_subscribe(
             );
         })
         .and_then(|(conn, handle, chat, target)| {
-            Database::insert_subscriber(conn, &target, chat)
-                .and_then(move |_| {
-                    handle
-                        .message(chat, format!("You are now subscribed to {}", target))
-                        .send()
-                        .map_err(|_| {})
-                })
+            Database::insert_subscriber(conn, &target, chat).and_then(move |_| {
+                handle
+                    .message(chat, format!("You are now subscribed to {}", target))
+                    .send()
+                    .map_err(|_| {})
+            })
         })
         .map(|_| {})
         .or_else(|_| Ok(()))
 }
 
 pub fn telegram_context(conn: SharedConnection, mut bot: telebot::Bot) {
-    tokio::executor::spawn(
+    let mut commands = CommandStream::new();
+    commands.add_command(
         DatabaseCommand::new(bot.new_cmd("/sub"), conn.clone())
             .map_err(|_| {})
-            .for_each(|(handle, msg, conn)| handle_subscribe(handle, msg, conn)),
+            .and_then(|(handle, msg, conn)| handle_subscribe(handle, msg, conn)),
     );
-    tokio::executor::spawn(
+    commands.add_command(
         DatabaseCommand::new(bot.new_cmd("/unsub"), conn.clone())
             .map_err(|_| {})
-            .for_each(|(handle, msg, conn)| handle_unsubscribe(handle, msg, conn)),
+            .and_then(|(handle, msg, conn)| handle_unsubscribe(handle, msg, conn)),
     );
-    tokio::executor::spawn(
+    commands.add_command(
         DatabaseCommand::new(bot.new_cmd("/subs"), conn.clone())
             .map_err(|_| {})
-            .for_each(|(handle, msg, conn)| handle_available(handle, msg, conn)),
+            .and_then(|(handle, msg, conn)| handle_available(handle, msg, conn)),
     );
+
+    tokio::executor::spawn(commands.map_err(|_| ()).for_each(|_| Ok(())));
+    
     tokio::executor::spawn(bot.into_future().map_err(|err| {
         eprintln!("Telegram API error: {:#?}", err);
     }));

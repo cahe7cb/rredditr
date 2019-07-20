@@ -3,12 +3,13 @@ use futures::stream::Stream;
 
 use redis::r#async::SharedConnection;
 
-use telebot::objects::Message;
 use telebot::bot::RequestHandle;
+use telebot::objects::Message;
 
 use failure::Error;
 
 use std::boxed::Box;
+
 
 pub struct DatabaseCommand {
     stream: Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>,
@@ -44,3 +45,48 @@ impl Stream for DatabaseCommand {
         }
     }
 }
+
+pub struct CommandStream {
+    streams: Vec<Box<Stream<Item = (), Error = ()> + Send>>,
+}
+
+impl CommandStream {
+    pub fn new() -> Self {
+        Self {
+            streams: Vec::<Box<Stream<Item = (), Error = ()> + Send>>::new(),
+        }
+    }
+
+    pub fn add_command(&mut self, command: impl Stream<Item = (), Error = ()> + Send + 'static) {
+        self.streams.push(Box::new(command));
+    }
+}
+
+impl Stream for CommandStream {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
+        let mut index = 0;
+        while index < self.streams.len() {
+            let stream = self.streams.get_mut(index).unwrap();
+            let poll = stream.poll();
+            if let Ok(result) = poll {
+                if let Async::Ready(item) = result {
+                    if let Some(_) = item {
+                        return Ok(Async::Ready(Some(())));
+                    } else {
+                        self.streams.remove(index);
+                    }
+                } else {
+                    index = index + 1;
+                }
+            } else if let Err(err) = poll {
+                self.streams.remove(index);
+                return Err(err);
+            }
+        }
+        Ok(Async::NotReady)
+    }
+}
+
