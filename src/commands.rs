@@ -10,7 +10,6 @@ use failure::Error;
 
 use std::boxed::Box;
 
-
 pub struct DatabaseCommand {
     stream: Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>,
     conn: SharedConnection,
@@ -46,35 +45,48 @@ impl Stream for DatabaseCommand {
     }
 }
 
-pub struct CommandStream {
-    streams: Vec<Box<Stream<Item = (), Error = ()> + Send>>,
+pub struct BotCommands {
+    conn: SharedConnection,
+    streams: Vec<Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>>,
 }
 
-impl CommandStream {
-    pub fn new() -> Self {
+impl BotCommands {
+    pub fn new(conn: SharedConnection) -> Self {
         Self {
-            streams: Vec::<Box<Stream<Item = (), Error = ()> + Send>>::new(),
+            conn: conn,
+            streams: Vec::<Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>>::new(
+            ),
         }
     }
 
-    pub fn add_command(&mut self, command: impl Stream<Item = (), Error = ()> + Send + 'static) {
+    pub fn create(
+        &self,
+        command: impl Stream<Item = (RequestHandle, Message), Error = Error> + Send + 'static,
+    ) -> impl Stream<Item = (RequestHandle, Message, SharedConnection), Error = Error> {
+        DatabaseCommand::new(command, self.conn.clone())
+    }
+
+    pub fn add_command(
+        &mut self,
+        command: impl Stream<Item = (RequestHandle, Message), Error = Error> + Send + 'static,
+    ) {
         self.streams.push(Box::new(command));
     }
 }
 
-impl Stream for CommandStream {
-    type Item = ();
-    type Error = ();
+impl Stream for BotCommands {
+    type Item = (RequestHandle, Message);
+    type Error = Error;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, ()> {
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Error> {
         let mut index = 0;
         while index < self.streams.len() {
             let stream = self.streams.get_mut(index).unwrap();
             let poll = stream.poll();
             if let Ok(result) = poll {
                 if let Async::Ready(item) = result {
-                    if let Some(_) = item {
-                        return Ok(Async::Ready(Some(())));
+                    if let Some(value) = item {
+                        return Ok(Async::Ready(Some(value)));
                     } else {
                         self.streams.remove(index);
                     }
@@ -89,4 +101,3 @@ impl Stream for CommandStream {
         Ok(Async::NotReady)
     }
 }
-

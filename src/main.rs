@@ -55,6 +55,9 @@ fn updater_worker_context(
 ) -> impl Future<Item = (), Error = ()> {
     future::loop_fn((http, conn, bot), |(http, conn, bot)| {
         Database::fetch_available_subs(conn)
+            .map_err(|err| {
+                eprintln!("Database error fetching available subs: {:#?}", err);
+            })
             .and_then(|(conn, subs)| update_available_subs(subs.into_iter(), (http, conn, bot)))
             .and_then(|(http, conn, bot)| Ok(future::Loop::Continue((http, conn, bot))))
     })

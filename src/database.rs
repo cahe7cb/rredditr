@@ -12,13 +12,10 @@ impl<C> Database<C>
 where
     C: ConnectionLike + Send + 'static,
 {
-    pub fn fetch_available_subs(conn: C) -> impl Future<Item = (C, Vec<String>), Error = ()> {
+    pub fn fetch_available_subs(conn: C) -> impl Future<Item = (C, Vec<String>), Error = RedisError> {
         redis::cmd("SMEMBERS")
             .arg("main/subs")
             .query_async::<_, _>(conn)
-            .map_err(|err: RedisError| {
-                eprintln!("Failed to fetch available sureddits: {:#?}", err);
-            })
     }
 
     pub fn fetch_subscribers(
@@ -66,27 +63,21 @@ where
         conn: C,
         target: &String,
         id: i64,
-    ) -> impl Future<Item = (C, ()), Error = ()> {
+    ) -> impl Future<Item = (C, ()), Error = RedisError> {
         redis::cmd("SREM")
             .arg(format!("subscribers/{}", target))
             .arg(id)
             .query_async::<_, ()>(conn)
-            .map_err(|err: redis::RedisError| {
-                eprintln!("Failed to unsubscribe from subreddit: {:#?}", err);
-            })
     }
 
     pub fn fetch_is_sub_available(
         conn: C,
         target: &String,
-    ) -> impl Future<Item = (C, bool), Error = ()> {
+    ) -> impl Future<Item = (C, bool), Error = RedisError> {
         redis::cmd("SISMEMBER")
             .arg(format!("main/subs"))
             .arg(target)
             .query_async::<_, bool>(conn)
-            .map_err(|err: redis::RedisError| {
-                eprintln!("Failed checking for existence of subreddit: {:#?}", err);
-            })
             .and_then(|(conn, is_member)| Ok((conn, is_member)))
     }
 
@@ -94,13 +85,10 @@ where
         conn: C,
         target: &String,
         id: i64,
-    ) -> impl Future<Item = (C, ()), Error = ()> {
+    ) -> impl Future<Item = (C, ()), Error = RedisError> {
         redis::cmd("SADD")
             .arg(format!("subscribers/{}", target))
             .arg(id)
             .query_async::<_, ()>(conn)
-            .map_err(|err: redis::RedisError| {
-                eprintln!("Failed to subscribe to: {:#?}", err);
-            })
     }
 }
