@@ -17,10 +17,12 @@ Make sure to set proper values for `TELEGRAM_BOT_TOKEN` and `REDIS_ADDRESS` in t
 
 On the database, a `set` called `main/subs` should be populated with the subreddits that will be indexed and updated by the bot.
 
+For Docker use `docker-compose run redis redis-cli -h rredditr_redis_1` to connect to the database container.
+
 Example: for `/r/rust` and `/r/programming`.
 ```
-SADD main/subs rust
-SADD main/subs programming
+> SADD main/subs rust
+> SADD main/subs programming
 ```
 
 ### Usage
