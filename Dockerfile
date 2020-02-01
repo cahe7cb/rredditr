@@ -1,4 +1,4 @@
-FROM rust:1.34
+FROM rust:1.39
 
 RUN mkdir -p /opt/rredditr
 RUN mkdir -p /opt/rredditr/src
