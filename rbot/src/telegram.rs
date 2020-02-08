@@ -4,7 +4,7 @@ use telebot::objects::Message;
 
 use futures::prelude::*;
 
-use redis::r#async::SharedConnection;
+use redis::aio::SharedConnection;
 
 use crate::commands::BotCommands;
 use crate::database::Database;
@@ -55,7 +55,7 @@ fn subscribe_insert_subscriber(
     chat: i64,
     target: String,
     conn: SharedConnection,
-) -> Box<Future<Item = (RequestHandle, Message), Error = Error> + Send> {
+) -> Box<dyn Future<Item = (RequestHandle, Message), Error = Error> + Send> {
     Box::new(
         Database::insert_subscriber(conn, &target, chat)
             .from_err()
@@ -71,7 +71,7 @@ fn subscribe_subreddit_not_available(
     handle: RequestHandle,
     chat: i64,
     target: String,
-) -> Box<Future<Item = (RequestHandle, Message), Error = Error> + Send> {
+) -> Box<dyn Future<Item = (RequestHandle, Message), Error = Error> + Send> {
     Box::new(
         handle
             .message(chat, format!("The subreddit {} is not available", target))
@@ -128,8 +128,8 @@ pub fn build_commands(bot: &mut telebot::Bot, conn: SharedConnection) -> BotComm
     commands
 }
 
-pub fn telegram_context(conn: SharedConnection, mut bot: telebot::Bot) {
-    let commands = build_commands(&mut bot, conn);
+pub fn telegram_context(conn: SharedConnection, bot: &mut telebot::Bot) {
+    let commands = build_commands(bot, conn);
     tokio::executor::spawn(
         commands
             .map_err(|err| {
@@ -137,7 +137,4 @@ pub fn telegram_context(conn: SharedConnection, mut bot: telebot::Bot) {
             })
             .for_each(|_| Ok(())),
     );
-    tokio::executor::spawn(bot.into_future().map_err(|err| {
-        eprintln!("Telegram API error: {:#?}", err);
-    }));
 }

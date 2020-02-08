@@ -1,17 +1,2 @@
-[package]
-name = "rredditr"
-version = "0.1.0"
-authors = ["cahe"]
-edition = "2018"
-
-[dependencies]
-telebot = "0.3.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = "0.4"
-reqwest = {version = "0.9", features = ["rustls-tls"] }
-tokio = "0.1.17"
-tokio-core = "0.1.17"
-futures = "0.1.25"
-redis = "0.10"
-failure = "0.1"
+[workspace]
+members=["rbot","rworker"]

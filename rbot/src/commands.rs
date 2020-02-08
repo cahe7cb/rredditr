@@ -1,7 +1,7 @@
 use futures::prelude::*;
 use futures::stream::Stream;
 
-use redis::r#async::SharedConnection;
+use redis::aio::SharedConnection;
 
 use telebot::bot::RequestHandle;
 use telebot::objects::Message;
@@ -11,7 +11,7 @@ use failure::Error;
 use std::boxed::Box;
 
 pub struct DatabaseCommand {
-    stream: Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>,
+    stream: Box<dyn Stream<Item = (RequestHandle, Message), Error = Error> + Send>,
     conn: SharedConnection,
 }
 
@@ -47,14 +47,14 @@ impl Stream for DatabaseCommand {
 
 pub struct BotCommands {
     conn: SharedConnection,
-    streams: Vec<Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>>,
+    streams: Vec<Box<dyn Stream<Item = (RequestHandle, Message), Error = Error> + Send>>,
 }
 
 impl BotCommands {
     pub fn new(conn: SharedConnection) -> Self {
         Self {
             conn: conn,
-            streams: Vec::<Box<Stream<Item = (RequestHandle, Message), Error = Error> + Send>>::new(
+            streams: Vec::<Box<dyn Stream<Item = (RequestHandle, Message), Error = Error> + Send>>::new(
             ),
         }
     }

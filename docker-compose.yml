@@ -5,7 +5,15 @@ services:
     expose:
       - "6379"
   bot:
-    build: .
+    build: ./rbot
+    depends_on:
+      - redis
+    env_file:
+      - ./.env
+    environment:
+      - REDIS_ADDRESS=redis://rredditr_redis_1/
+  worker:
+    build: ./rworker
     depends_on:
       - redis
     env_file:
