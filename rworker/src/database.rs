@@ -10,6 +10,17 @@ impl<C> Database<C>
 where
     C: ConnectionLike + Send + 'static,
 {
+    pub async fn log_work(
+        conn: &mut C,
+        str : String
+    ) -> Result<(), RedisError> {
+        redis::cmd("LPUSH")
+            .arg("main/logs")
+            .arg(str)
+            .query_async::<_, _>(conn)
+            .await
+    }
+
     pub async fn queue_message(
         conn: &mut C,
         str : String
@@ -20,6 +31,7 @@ where
             .query_async::<_, _>(conn)
             .await
     }
+
     pub async fn fetch_available_subs(
         conn: &mut C
     ) -> Result<Vec<String>, RedisError> {

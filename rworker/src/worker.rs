@@ -18,6 +18,21 @@ pub struct Message {
     pub link: String,
 }
 
+#[derive(Serialize, Clone)]
+pub struct WorkResult {
+    pub results : i64,
+    pub news : i64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct WorkLog {
+    pub sub: String,
+    pub timestamp : String,
+    pub duration: i64,
+    pub result : Option<WorkResult>,
+    pub error : Option<String>,
+}
+
 async fn get_subscribers(
     conn: &mut redis::aio::MultiplexedConnection,
     subreddit: &String,
@@ -74,8 +89,9 @@ pub async fn handle_update(
     http: &reqwest::Client,
     conn: &mut redis::aio::MultiplexedConnection,
     subreddit: String,
-) -> Result<(), ()> {
+) -> Result<WorkResult, ()> {
     let submissions = fetch_submissions(&http, &subreddit).await?;
+    let count = submissions.len();
     let subscribers = get_subscribers(conn, &subreddit).await?;
     let news = filter_new_submissions(conn, submissions).await?;
     for s in subscribers.iter() {
@@ -91,7 +107,13 @@ pub async fn handle_update(
     }
     Database::update_submissions(conn, news.clone())
         .map_err(|err| log::error!("Failed updating new submissions: {:#?}", err))
-        .await
+        .await?;
+    Ok(
+        WorkResult {
+            results: count as i64,
+            news : news.len() as i64,
+        }
+    )
 }
 
 pub async fn updater_worker_context(
@@ -103,8 +125,27 @@ pub async fn updater_worker_context(
             .await
             .map_err(|err : redis::RedisError| error!("Database error fetching available subs: {:#?}", err))?;
         for next in subs {
+            let tzero = chrono::Utc::now();
+            let mut stats = WorkLog {
+                sub: next.clone(),
+                timestamp: tzero.to_rfc3339(),
+                duration: 0,
+                result: None,
+                error: None,
+            };
             log::info!("Updating {}", next);
-            handle_update(&http, &mut conn, next).await?;
+            match handle_update(&http, &mut conn, next).await {
+                Ok(r) => stats.result = Some(r),
+                Err(e) => stats.error = Some(format!("{:#?}", e)),
+            }
+            std::time::SystemTime::now();
+            stats.duration = chrono::Utc::now().timestamp_millis() - tzero.timestamp_millis();
+            if let Ok(log) = serde_json::to_string(&stats)
+                .map_err(|err| error!("Failed logging work: {:#?}", err))
+            {
+                Database::log_work(&mut conn, log)
+                    .map_err(|err| error!("Failed logging work: {:#?}", err)).await;
+            }
             tokio::time::delay_for(std::time::Duration::from_secs(30)).await;
         }
     }
